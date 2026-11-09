@@ -2,6 +2,8 @@
 
 添付論文「Multimodal GRU with directed pairwise cross-modal attention for sentiment analysis」(Qin et al., Scientific Reports 15, 10112, 2025) の記述から再構成した実装です。
 
+MOSIの既定の取得先は [Kaggle `mathurinache/cmu-mosi`](https://www.kaggle.com/datasets/mathurinache/cmu-mosi) **version 1** です。MOSEIは従来のSDK取得を維持します。
+
 CMU-MOSI / CMU-MOSEI を対象に、**t / a / v / ta / tv / av / tav の7構成を、それぞれ最初から独立に学習**し、同じテスト集合で Acc2・Acc7 を出します。t は text、a は audio、v は visual です。全モダリティで学習したモデルの入力を後からゼロにする実験ではありません。
 
 ## 再現の範囲と、先に確認する点
@@ -13,10 +15,10 @@ CMU-MOSI / CMU-MOSEI を対象に、**t / a / v / ta / tv / av / tav の7構成�
 | 中核モデル | Conv1D、位置埋め込み、方向付きペアAttention、GRU、結合・FC・残差 | 図3と式(1)–(9)を基に構成。3モダリティでは6方向、2つでは2方向、単独ではAttentionを通さずGRUへ入力 |
 | Attention | 式(5)は双線形スコア、図3はCT、表7は4 heads | 4分割のheadごとに双線形スコアを計算。ソース側時間軸でsoftmax。スケーリングなし。各方向2ブロック。CTのFFN幅4dとpost-LNは補完した設計 |
 | GRU | 2層、隠れ40。式(3)はresetを行列積の前に適用 | 既定 `paper` は式(1)–(4)を直接実装（式にないbiasは付加しない）。`pytorch` は高速な標準GRUで、候補状態の式が異なる |
-| 特徴抽出 | word2vec/CNN、openSMILE、3D-CNNなどを記述 | 既定はSDK公開済みGloVe / COVAREP / OpenFace2。論文記載の特徴抽出器をそのまま再現したものではない |
+| 特徴抽出 | word2vec/CNN、openSMILE、3D-CNNなどを記述 | Kaggle経路は固定GloVe等 / openSMILE IS09 LLD / 固定R3D-18。SDK経路はGloVe / COVAREP / OpenFace2。どちらも論文の特徴抽出器と完全に同一とは主張しない |
 | 損失・出力 | Cross entropyの記述、連続値MAE/Corr、表7のoutput_dim=10が混在 | 既定 `ce7` は7クラスCE。比較用に `mae` / `mse` の連続値回帰も選択可能。10クラスにはしない |
 | 残差・正規化 | post-LN / pre-LN / ResiDualを説明するが、最終構成は不明瞭 | CTと融合部に通常のpost-LN残差を使用。ResiDualやBatchNormの挿入位置は推測しない |
-| データ分割 | 分割・前処理の詳細に不足あり | SDKの公式動画ID分割。ラベル区間に切り出し、モダリティ間の時間軸は揃えない |
+| データ分割 | 分割・前処理の詳細に不足あり | 公式SDKの動画ID分割。Kaggleは配布済み区間を使用し、CSVの分割を公式IDと照合。SDKはラベル時刻で切り出す。時間軸は揃えない |
 | 入力長 | 詳細不明 | 最大長 t=128, a=512, v=512。超過分は区間全体を等分して平均。0で上限解除。設定と実データ数を記録 |
 | その他 | 学習詳細に不足あり | a/vの訓練集合だけで特徴別標準化、Adam、勾配clip=1、検証損失最小のcheckpointを選択。これらの補完設定も保存 |
 
@@ -38,14 +40,14 @@ cd cmu_mosi_tutorial
 uv python install 3.11
 
 # CPU。macOSではPyPIのmacOS用PyTorchが使われます。
-uv sync --frozen --extra cpu --group dev
+uv sync --frozen --extra cpu --extra raw --group dev
 uv run --no-sync pytest -q
 ```
 
 NVIDIA GPUを使うLinux/Windows環境では、CPU用のsyncの代わりに次を実行します。
 
 ```bash
-uv sync --frozen --extra cu124 --group dev
+uv sync --frozen --extra cu124 --extra raw --group dev
 uv run --no-sync python -c 'import torch; print(torch.__version__, torch.cuda.is_available())'
 uv run --no-sync pytest -q
 ```
@@ -54,25 +56,109 @@ CUDA 12.4に対応したNVIDIAドライバが必要です。Python依存関係�
 
 同じ処理をまとめた `bash setup.sh cpu` / `bash setup.sh cu124` も利用できます。
 
-## 実データの取得・前処理
+## KaggleからMOSIを取得・前処理（既定）
 
-指定SDKのcommit `2eadcd7e7b9e20e83b868cdad385b41830285c` に含まれるURLレシピと公式分割を `src/mulg/resources/sdk_manifest.json` に同梱しています。データセット自体は同梱しません。SDKのCSD形式をh5pyで直接読み、旧SDKパッケージのインストールに依存しない構成です。SDK由来データ・分割を使用しており、別データセットへの置換は行いません。
+指定されたKaggle版は **5,049ファイル、展開後4,275,432,942 bytes（約4.28 GB）** です。動画・WAV・書き起こし・COVAREP MATを含みます。SDKのCSD形式の特徴量とsentiment正解ラベルは含まれません。追加するラベルと事前学習モデルも含め、空き容量は余裕を持たせてください。
+
+### 1. Kaggleの生データを取得
 
 ```bash
-# MOSI
-uv run --no-sync mulg download --dataset mosi --output data/raw/mosi
-uv run --no-sync mulg prepare \
-  --dataset mosi --raw-dir data/raw/mosi --output data/mosi.h5
-
-# MOSEI
-uv run --no-sync mulg download --dataset mosei --output data/raw/mosei
-uv run --no-sync mulg prepare \
-  --dataset mosei --raw-dir data/raw/mosei --output data/mosei.h5
+uv run --no-sync mulg download --dataset mosi --output data/kaggle/mosi
 ```
 
-**取得先の制約:** SDKのレシピは古い `immortal.multicomp.cs.cmu.edu` のURLを含み、SDK READMEにもGloVe/BERT特徴の公開停止・再アラインメントに関する注意があります。この作業環境からのMOSI URL確認ではHTTP/HTTPSとも403となったため、実データの取得・実学習・実測Acc2/Acc7は完了していません。ローカル環境でも取得できない場合、以下の既存CSD指定で進めます。エラー時に合成データへ自動置換することはありません。
+MOSIの既定は `--source kaggle` です。Kaggleのversion 1を固定し、ZIPをストリーミング取得・展開します。公開APIによる取得を作成環境で確認しました。SHA256付きの `download_manifest.json` を保存し、再実行時は取得済みファイルの整合性を検証します。ソースや選択ファイルが異なる出力先への混在は拒否します。`--overwrite` はこのダウンローダーが作成した同じデータ構成だけを再取得します。
 
-HTTPSを既定にしています。配布元がHTTPのみを提供している場合は `download --scheme http` を明示してください。失敗したURLは `download_manifest.json` に残ります。取得済みファイルは検証して再利用し、`--overwrite` を指定した場合だけ置き換えます。
+Kaggleが認証を要求する環境では、ローカルで `KAGGLE_API_TOKEN`、または `KAGGLE_USERNAME` と `KAGGLE_KEY` を設定してください。認証情報はコード・Git・manifestへ保存しません。ブラウザで取得したZIPを使う場合は次のように指定します。
+
+```bash
+uv run --no-sync mulg download --dataset mosi \
+  --kaggle-archive /path/to/cmu-mosi.zip --output data/kaggle/mosi
+```
+
+取得の疎通確認だけなら、全体を取得せずファイルを指定できます。これは完全な学習データではありません。
+
+```bash
+uv run --no-sync mulg download --dataset mosi --output data/kaggle/check \
+  --kaggle-file Raw/Transcript/Segmented/2iD-tVS8NPw.annotprocessed
+```
+
+### 2. 未所持の正解ラベルを取得
+
+ラベルはKaggleとは別に、[MMSAが案内する公開配布先](https://github.com/thuiar/MMSA#2-datasets)から取得します。同じMOSIの `label.csv` で、作成時に次を検証しました。
+
+- 2,199区間すべてがKaggleの `Raw/Video/Segmented/<video_id>_<clip_id>.mp4` と一致。
+- 公式SDKの動画ID分割と全件一致。train=1,284 / valid=229 / test=686。
+- 連続値の `label` 列を使用。`annotation` の文字ラベルや `label_T/A/V` は使用しない。
+
+```bash
+uv run --no-sync mulg download-labels --output data/annotations/mosi.csv
+```
+
+CSVのSHA256は `dec8b0affc5c7c923688040f091dddb61966afc729f54630ef91d3f51624b821` に固定しています。内容が変わったりサインインページが返った場合は検証で停止します。実データの代わりに推定ラベルや合成ラベルを使うことはありません。出典はCSV横のmanifestにも保存します。
+
+### 3. テキスト用の事前学習ベクトルを用意
+
+手元のテキスト形式GloVe/word2vecを指定します。例として [Stanford GloVe](https://nlp.stanford.edu/projects/glove/) の `glove.6B.50d.txt` を使えます。バイナリword2vec形式には対応していません。
+
+```bash
+mkdir -p data/embeddings
+curl -fL https://nlp.stanford.edu/data/glove.6B.zip -o data/embeddings/glove.6B.zip
+unzip data/embeddings/glove.6B.zip glove.6B.50d.txt -d data/embeddings
+```
+
+このZIPは約0.86 GBです。上のStanford配布先は作成環境の接続確認で503だったため、ここではファイル本体の取得を検証していません。ローカルでも取得できない場合は、公式ページから入手したプレーンテキストの事前学習ベクトルを `--embedding-file` に指定してください。埋め込みをMOSIのラベルから学習し直すことはありません。
+
+### 4. 生データから特徴量を作成
+
+```bash
+uv run --no-sync mulg prepare-kaggle \
+  --raw-dir data/kaggle/mosi \
+  --labels-csv data/annotations/mosi.csv \
+  --embedding-file data/embeddings/glove.6B.50d.txt \
+  --output data/mosi_kaggle.h5 --device auto
+```
+
+`--extra raw` の依存関係が必要です。`bash setup.sh cpu` / `cu124` はこれらも導入します。
+
+| 入力 | Kaggle経路の特徴量 |
+|---|---|
+| t | `.annotprocessed` の区間番号で対応させた書き起こし。小文字の単語に分割し、固定GloVe等へ変換。未知語はゼロ。未知語数・埋め込みSHA256を記録 |
+| a | 分割済み16 kHz WAVからopenSMILE IS09のLow-Level Descriptorsを抽出。配布済みの動画全体のCOVAREP MATはこの経路では使わない |
+| v | 分割済みMP4から約8 fpsでサンプリング。16フレームの非重複窓ごとに、Kinetics-400学習済みR3D-18のFC手前の512次元特徴を抽出。末尾の短い窓は最後のフレームで補う |
+
+3D-CNNは固定して特徴抽出にだけ使用し、MulG学習時には更新しません。初回はtorchvisionの学習済み重み（約127 MiB）を取得します。`TORCH_HOME` が未指定なら出力HDF5の親ディレクトリの `pretrained/torch/hub` にキャッシュします。
+
+これらは論文の抽出器の詳細が不明な部分を補完した構成で、以前のGloVe/COVAREP/OpenFace2のCSD経路とは特徴量が異なります。**従来のCSD実験と同一条件とは扱わず、`mosi_kaggle` として結果を保存してください。** モデルのMulG構造・全7構成・指標の定義は共通です。
+
+欠損したメディア・書き起こし・不正ラベルがあれば処理を止めます。正常なら全2,199区間を保存します。a/vの標準化は訓練集合だけで計算します。前処理は時間を要し、途中で失敗した場合は再実行が必要です。
+
+### 5. 全7構成を学習・評価
+
+```bash
+uv run --no-sync mulg run \
+  --data data/mosi_kaggle.h5 --output runs/mosi_kaggle \
+  --modalities all --seeds 13 37 73 --device auto
+```
+
+一括実行する場合は、事前学習ベクトルを用意した後に次を実行します。
+
+```bash
+bash run_all.sh mosi kaggle data/embeddings/glove.6B.50d.txt
+```
+
+## 従来のSDK CSD経路を使う場合
+
+SDK取得は `--source sdk` を明示します。MOSEIは既定でもSDKです。Kaggleの指定URLはMOSIのみであり、MOSEIをここから取得することはできません。
+
+```bash
+uv run --no-sync mulg download --dataset mosi --source sdk --output data/raw/mosi
+uv run --no-sync mulg prepare --dataset mosi --raw-dir data/raw/mosi --output data/mosi.h5
+
+uv run --no-sync mulg download --dataset mosei --source sdk --output data/raw/mosei
+uv run --no-sync mulg prepare --dataset mosei --raw-dir data/raw/mosei --output data/mosei.h5
+```
+
+SDK commit `2eadcd7e7b9e20e83b868cdad385b41830285c` のURLレシピと公式分割を `src/mulg/resources/sdk_manifest.json` に同梱しています。CSDをh5pyで読み、旧SDKパッケージ自体のインストールには依存しません。SDK旧配布URLは作成環境から403で取得できなかったため、利用可能な既存CSDを指定する経路も残しています。
 
 ### 既存のSDK CSDファイルを使う
 
@@ -89,14 +175,14 @@ uv run --no-sync mulg prepare --dataset mosi \
 
 複数rootのCSDは `--text-key` / `--audio-key` / `--visual-key` / `--labels-key` でroot名を指定します。MOSEIのラベルでは先頭列のsentimentを使用し、後続の感情ラベルは使用しません。
 
-MOSIでopenSMILEを使う場合は `download --audio-feature OpenSMILE` を指定できます。MOSEIのopenSMILE URLは指定SDKの有効なレシピに存在しないため、既存CSDを `--audio-csd` に渡してください。配布特徴を変更した結果は、既定のCOVAREPの結果と別実験として記録してください。
+SDK経路のMOSIでopenSMILE CSDを使う場合は `download --source sdk --audio-feature OpenSMILE` を指定できます。MOSEIのopenSMILE URLは指定SDKの有効なレシピに存在しないため、既存CSDを `--audio-csd` に渡してください。配布特徴を変更した結果は、既定のCOVAREPの結果と別実験として記録してください。
 
 ### word vector CSDを取得できない場合
 
 SDKの生単語CSDと、手元にある**テキスト形式**GloVe/word2vecの固定済み事前学習ベクトルを組み合わせることもできます（バイナリword2vec形式は未対応）。大きなベクトルファイルから必要な単語だけを読み、未知語はゼロベクトルにし、その数を記録します。データセットを使った埋め込みの再学習は行いません。
 
 ```bash
-uv run --no-sync mulg download --dataset mosi \
+uv run --no-sync mulg download --dataset mosi --source sdk \
   --text-feature words --output data/raw/mosi_words
 uv run --no-sync mulg prepare --dataset mosi \
   --raw-dir data/raw/mosi_words \
@@ -115,7 +201,9 @@ uv run --no-sync mulg prepare --dataset mosi \
 - `data/mosi.manifest.json` 等に入力SHA256、入力次元、区間数、除外理由・ID、未知動画を記録します。公開済みの分割件数と違う場合は、この記録で原因を確認してください。
 - `prepare` は既存出力を上書きしません。特徴・長さ・入力を変更するときは別の出力名を指定します。
 
-## 全7構成を学習・評価
+## 全7構成を学習・評価（共通CLI）
+
+Kaggle経路は前述の `data/mosi_kaggle.h5` / `runs/mosi_kaggle` を指定します。以下は従来のSDK CSD経路の例です。
 
 ```bash
 uv run --no-sync mulg run \
@@ -160,7 +248,7 @@ uv run --no-sync mulg run --data data/mosi.h5 \
 
 同一設定で完了済み構成をスキップするには `--resume` を付けます。中断された構成はepoch 1から再学習します。epoch途中のoptimizer状態からの再開ではありません。データ・モデル・学習設定・実装ハッシュが異なる場合、同じ出力への再開を拒否します。
 
-取得からまとめて実行する場合は `bash run_all.sh mosi` / `bash run_all.sh mosei` も使えます。
+SDK経路を取得からまとめて実行する場合は `bash run_all.sh mosi sdk` / `bash run_all.sh mosei sdk` も使えます。Kaggle経路の一括コマンドは前述のとおりです。
 
 ## Acc2 / Acc7 の定義と保存先
 
@@ -179,7 +267,7 @@ uv run --no-sync mulg run --data data/mosi.h5 \
 主な出力:
 
 ```text
-runs/mosi/
+runs/mosi_kaggle/
   summary.csv                 # t/a/v/ta/tv/av/tavの7行、seed間のmeanと標本std
   results.json                # 各構成・seedの結果と件数
   tav/seed_13/
@@ -196,8 +284,8 @@ runs/mosi/
 
 ```bash
 uv run --no-sync mulg evaluate \
-  --checkpoint runs/mosi/tav/seed_13/best.pt \
-  --data data/mosi.h5 --output runs/reevaluated_tav
+  --checkpoint runs/mosi_kaggle/tav/seed_13/best.pt \
+  --data data/mosi_kaggle.h5 --output runs/reevaluated_tav
 ```
 
 ## データなしで動作確認する
@@ -210,11 +298,14 @@ uv run --no-sync mulg run --data data/synthetic.h5 \
 
 **これは合成データでの疎通確認です。論文・CMUデータセットの再現精度ではありません。** 合成データであることはHDF5、metrics.json、summary.csvおよびコンソール表示に残ります。実データの代用にはしないでください。
 
-テストでは、Attentionの式、GRUの式、パディングの不変性、全7構成の勾配、時間境界、公式分割、訓練集合だけの標準化、2種のAcc2、7クラス化、全7構成の合成データ学習、checkpoint再評価と完了済み再開を確認します。実データの特徴整合性や論文の報告精度は検証していません。
+テストでは、Attentionの式、GRUの式、パディングの不変性、全7構成の勾配、時間境界、公式分割、訓練集合だけの標準化、2種のAcc2、7クラス化、全7構成の合成データ学習、checkpoint再評価と完了済み再開を確認します。Kaggleの一部実ファイル取得と音声・映像特徴抽出、MMSAの実ラベルCSV取得・全ID/公式分割照合も別途確認しました。全量の特徴抽出・実学習・論文の報告精度は検証していません。
 
 ## 参照
 
 - 論文: https://doi.org/10.1038/s41598-025-93023-3
+- Kaggle MOSI: https://www.kaggle.com/datasets/mathurinache/cmu-mosi
+- MMSAのラベル配布案内: https://github.com/thuiar/MMSA#2-datasets
+- Stanford GloVe: https://nlp.stanford.edu/projects/glove/
 - 指定SDK: https://github.com/CMU-MultiComp-Lab/CMU-MultimodalSDK
 - 使用commit: https://github.com/CMU-MultiComp-Lab/CMU-MultimodalSDK/tree/2eadcd7e7b9e20e83b868cdad385b41830285c
 - 論文記載の著者コードURL（作成時404）: https://github.com/bitbitlemon/Multimodal-GRU

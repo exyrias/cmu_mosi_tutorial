@@ -11,6 +11,6 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 uv python install 3.11
-uv sync --frozen --extra "$backend" --group dev
+uv sync --frozen --extra "$backend" --extra raw --group dev
 uv run --no-sync pytest -q
 echo 'Ready. Use: uv run --no-sync mulg --help'
