@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mulg-reproduction"
+version = "0.1.0"
+description = "Documented reconstruction of MulG for CMU-MOSI/MOSEI modality ablations"
+requires-python = ">=3.11,<3.13"
+dependencies = ["torch==2.6.0", "numpy>=1.26.4,<2", "h5py>=3.11,<4", "requests>=2.32,<3", "tqdm>=4.66,<5"]
+
+[project.optional-dependencies]
+cpu = ["torch==2.6.0"]
+cu124 = ["torch==2.6.0"]
+
+[dependency-groups]
+dev = ["pytest>=8.3,<9", "ruff>=0.9,<1"]
+
+[project.scripts]
+mulg = "mulg.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mulg"]
+
+[tool.uv]
+conflicts = [[{extra = "cpu"}, {extra = "cu124"}]]
+
+[tool.uv.sources]
+torch = [
+  {index = "pytorch-cpu", extra = "cpu", marker = "sys_platform != 'darwin'"},
+  {index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'"},
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
