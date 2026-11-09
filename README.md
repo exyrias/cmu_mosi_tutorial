@@ -2,7 +2,7 @@
 
 添付論文「Multimodal GRU with directed pairwise cross-modal attention for sentiment analysis」(Qin et al., Scientific Reports 15, 10112, 2025) の記述から再構成した実装です。
 
-MOSIの既定の取得先は [Kaggle `mathurinache/cmu-mosi`](https://www.kaggle.com/datasets/mathurinache/cmu-mosi) **version 1** です。MOSEIは従来のSDK取得を維持します。
+MOSIの既定の取得先は、今回指定された [Google Driveのmosiフォルダ](https://drive.google.com/drive/folders/1uEK737LXB9jAlf9kyqRs6B9N6cDncodq) です。**手動で取得した `mosi_data.pkl` 1ファイルから、追加のGloVe・ラベル取得なしで学習できます。** KaggleとSDKの取得経路も選択できます。MOSEIは従来のSDK取得を維持します。
 
 CMU-MOSI / CMU-MOSEI を対象に、**t / a / v / ta / tv / av / tav の7構成を、それぞれ最初から独立に学習**し、同じテスト集合で Acc2・Acc7 を出します。t は text、a は audio、v は visual です。全モダリティで学習したモデルの入力を後からゼロにする実験ではありません。
 
@@ -15,11 +15,11 @@ CMU-MOSI / CMU-MOSEI を対象に、**t / a / v / ta / tv / av / tav の7構成�
 | 中核モデル | Conv1D、位置埋め込み、方向付きペアAttention、GRU、結合・FC・残差 | 図3と式(1)–(9)を基に構成。3モダリティでは6方向、2つでは2方向、単独ではAttentionを通さずGRUへ入力 |
 | Attention | 式(5)は双線形スコア、図3はCT、表7は4 heads | 4分割のheadごとに双線形スコアを計算。ソース側時間軸でsoftmax。スケーリングなし。各方向2ブロック。CTのFFN幅4dとpost-LNは補完した設計 |
 | GRU | 2層、隠れ40。式(3)はresetを行列積の前に適用 | 既定 `paper` は式(1)–(4)を直接実装（式にないbiasは付加しない）。`pytorch` は高速な標準GRUで、候補状態の式が異なる |
-| 特徴抽出 | word2vec/CNN、openSMILE、3D-CNNなどを記述 | Kaggle経路は固定GloVe等 / openSMILE IS09 LLD / 固定R3D-18。SDK経路はGloVe / COVAREP / OpenFace2。どちらも論文の特徴抽出器と完全に同一とは主張しない |
+| 特徴抽出 | word2vec/CNN、openSMILE、3D-CNNなどを記述 | Driveは配布済み数値特徴（既定t=300/a=5/v=20）。Kaggleは固定GloVe等 / openSMILE IS09 LLD / 固定R3D-18。SDKはGloVe / COVAREP / OpenFace2。各経路の特徴量は異なる |
 | 損失・出力 | Cross entropyの記述、連続値MAE/Corr、表7のoutput_dim=10が混在 | 既定 `ce7` は7クラスCE。比較用に `mae` / `mse` の連続値回帰も選択可能。10クラスにはしない |
 | 残差・正規化 | post-LN / pre-LN / ResiDualを説明するが、最終構成は不明瞭 | CTと融合部に通常のpost-LN残差を使用。ResiDualやBatchNormの挿入位置は推測しない |
-| データ分割 | 分割・前処理の詳細に不足あり | 公式SDKの動画ID分割。Kaggleは配布済み区間を使用し、CSVの分割を公式IDと照合。SDKはラベル時刻で切り出す。時間軸は揃えない |
-| 入力長 | 詳細不明 | 最大長 t=128, a=512, v=512。超過分は区間全体を等分して平均。0で上限解除。設定と実データ数を記録 |
+| データ分割 | 分割・前処理の詳細に不足あり | Driveはファイル内の分割を使い、全動画IDを公式SDK分割と照合。KaggleもCSVを公式IDと照合。SDKはラベル時刻で切り出す |
+| 入力長 | 詳細不明 | 上限 t=128, a=512, v=512。DriveのPKLは既に長さ50の配列へ前処理済み。必要時は区間全体を等分平均。0で上限解除 |
 | その他 | 学習詳細に不足あり | a/vの訓練集合だけで特徴別標準化、Adam、勾配clip=1、検証損失最小のcheckpointを選択。これらの補完設定も保存 |
 
 論文の数値にも整合しない箇所があります。MOSIは表2で Acc2=82.2 / Acc7=40.5、表6のFull Modelで85.0 / 55.0です。MOSEIは表3・5で82.1 / 51.4です。また概要の82.2 / 82.1は7クラス正解率と書かれていますが、表ではAcc2です。**これらを一つの目標値として混ぜないでください。** 本プログラムは論文の値を結果として埋め込みません。
@@ -40,45 +40,129 @@ cd cmu_mosi_tutorial
 uv python install 3.11
 
 # CPU。macOSではPyPIのmacOS用PyTorchが使われます。
-uv sync --frozen --extra cpu --extra raw --group dev
+uv sync --frozen --extra cpu --extra drive --group dev
 uv run --no-sync pytest -q
 ```
 
 NVIDIA GPUを使うLinux/Windows環境では、CPU用のsyncの代わりに次を実行します。
 
 ```bash
-uv sync --frozen --extra cu124 --extra raw --group dev
+uv sync --frozen --extra cu124 --extra drive --group dev
 uv run --no-sync python -c 'import torch; print(torch.__version__, torch.cuda.is_available())'
 uv run --no-sync pytest -q
 ```
 
 CUDA 12.4に対応したNVIDIAドライバが必要です。Python依存関係は `uv.lock` で固定します。GPU用wheelでの実学習は今回検証していません。以降は **`uv run --no-sync`** を使い、syncで選択したCPU/GPUバックエンドを維持します。GPUへの切替時はもう一度対応する `uv sync` を実行してください。
 
-同じ処理をまとめた `bash setup.sh cpu` / `bash setup.sh cu124` も利用できます。
+同じ処理をまとめた `bash setup.sh cpu` / `bash setup.sh cu124` も利用できます。これらは既定でDrive用の環境を準備します。Kaggle生データの特徴抽出用には `bash setup.sh cpu raw` / `bash setup.sh cu124 raw` を使います。
 
-## KaggleからMOSIを取得・前処理（既定）
+## 指定Google DriveからMOSIを取得・前処理（既定）
+
+指定フォルダへのアクセスとPKL本体のダウンロードに成功しました。まず **`mosi_data.pkl` 1ファイル**を使用してください。数値化済みの3モダリティ・連続値sentimentラベル・サンプルID・train/valid/testが含まれています。
+
+| ファイル | サイズ | 件数 train / valid / test | 特徴次元 t / a / v |
+|---|---:|---:|---:|
+| `mosi_data.pkl`（推奨・対応） | 154,041,300 bytes | 1,284 / 229 / 686 | 300 / 5 / 20 |
+| `mosi_raw.pkl`（任意・対応） | 357,186,706 bytes | 1,283 / 214 / 686 | 300 / 74 / 35 |
+
+フォルダには `mosi.hdf5` と `mosi_unalign.hdf5` もあります。確認した `mosi.hdf5` は生単語の `words` 等を含む別構造です。今回の直接インポートには上表のPKLを選択します。
+
+### 手動ダウンロードする場合
+
+1. [指定フォルダ](https://drive.google.com/drive/folders/1uEK737LXB9jAlf9kyqRs6B9N6cDncodq)をブラウザで開きます。
+2. `mosi_data.pkl` をダウンロードします。
+3. ファイルを任意の場所に置き、次を実行します。手動取得の場合はファイルをリポジトリ内へ移す必要はありません。
+
+```bash
+uv run --no-sync mulg prepare-drive \
+  --input /path/to/mosi_data.pkl \
+  --output data/mosi_drive_data.h5
+
+uv run --no-sync mulg run \
+  --data data/mosi_drive_data.h5 --output runs/mosi_drive_data \
+  --modalities all --seeds 13 37 73
+```
+
+または、手動取得したファイルを指定して一括実行できます。
+
+```bash
+bash run_all.sh mosi drive /path/to/mosi_data.pkl
+```
+
+### 自動ダウンロードする場合
+
+```bash
+# --source drive がMOSIの既定。Google Driveの大きなファイル確認画面にはgdownで対応します。
+uv run --no-sync mulg download --dataset mosi --output data/drive/mosi
+
+uv run --no-sync mulg prepare-drive \
+  --input data/drive/mosi/mosi_data.pkl --output data/mosi_drive_data.h5
+
+uv run --no-sync mulg run \
+  --data data/mosi_drive_data.h5 --output runs/mosi_drive_data \
+  --modalities all --seeds 13 37 73
+```
+
+取得から全7構成の評価までをまとめて実行する場合:
+
+```bash
+bash run_all.sh mosi
+```
+
+自動取得には `--extra drive` のgdownが必要です。Drive側の混雑・アクセス制限等で失敗した場合は、同じPKLを手動取得して前述の `prepare-drive --input` に渡せます。`prepare-drive` 自体はネット接続を使いません。
+
+`mosi_raw.pkl` を使う場合:
+
+```bash
+uv run --no-sync mulg download --dataset mosi --drive-file mosi_raw.pkl --output data/drive/mosi
+bash run_all.sh mosi drive data/drive/mosi/mosi_raw.pkl
+```
+
+こちらの保存先は `data/mosi_drive_raw.h5` と `runs/mosi_drive_raw/` になります。2つのPKLは件数と特徴次元が異なるため、結果を別々に記録してください。
+
+### この経路の前処理・再現条件
+
+- 公式SDKの動画ID分割と全サンプルを照合します。ランダムな区間分割へ変更しません。
+- 両PKLとも各モダリティの配列長は50です。`mosi_raw.pkl` という名前から未整列の生時系列とは推定せず、配布済みの整列・切詰めを前提に使用します。
+- 先頭・末尾で全モダリティが同時にゼロのパディングを取り除きます。途中のゼロや、一部モダリティだけがゼロのフレームは保持します。全ゼロのモダリティ数を記録します。
+- NaN/Infをゼロ置換し、a/vの標準化は訓練集合だけで計算します。textは再標準化しません。
+- 全体のSHA256を照合した後、NumPy配列を許可する限定ローダーで読み込みます。ラベルの有限性・範囲[-3,3]・形状・ID重複・分割・次元を検証します。
+- **特徴抽出器や選択した5/20次元の詳細はファイル内に記されていません。** この配布特徴を使うMulGの再構成実験であり、論文の抽出条件やKaggle版と同一の条件とは主張しません。
+- `data/mosi_drive_data.manifest.json` 等に入力SHA256・出典・特徴次元・件数・パディング処理・標準化条件を残します。チェックポイントにも記録します。
+
+確認したSHA256:
+
+```text
+mosi_data.pkl  1a113ad5edc8b9b625a7e29e6b94a97ecade70494c4e022d9f7ba5affca3bbdc
+mosi_raw.pkl   5b8a29b2a603ce37611117d088570369c35246f843dade8865ff59cc5ee6f338
+```
+
+## KaggleからMOSIを取得・前処理（任意）
+
+この経路を使う場合は `bash setup.sh cpu raw` 等で特徴抽出用の環境を準備します。
+
 
 指定されたKaggle版は **5,049ファイル、展開後4,275,432,942 bytes（約4.28 GB）** です。動画・WAV・書き起こし・COVAREP MATを含みます。SDKのCSD形式の特徴量とsentiment正解ラベルは含まれません。追加するラベルと事前学習モデルも含め、空き容量は余裕を持たせてください。
 
 ### 1. Kaggleの生データを取得
 
 ```bash
-uv run --no-sync mulg download --dataset mosi --output data/kaggle/mosi
+uv run --no-sync mulg download --dataset mosi --source kaggle --output data/kaggle/mosi
 ```
 
-MOSIの既定は `--source kaggle` です。Kaggleのversion 1を固定し、ZIPをストリーミング取得・展開します。公開APIによる取得を作成環境で確認しました。SHA256付きの `download_manifest.json` を保存し、再実行時は取得済みファイルの整合性を検証します。ソースや選択ファイルが異なる出力先への混在は拒否します。`--overwrite` はこのダウンローダーが作成した同じデータ構成だけを再取得します。
+Kaggleを使う場合は `--source kaggle` を明示します。Kaggleのversion 1を固定し、ZIPをストリーミング取得・展開します。公開APIによる取得を作成環境で確認しました。SHA256付きの `download_manifest.json` を保存し、再実行時は取得済みファイルの整合性を検証します。ソースや選択ファイルが異なる出力先への混在は拒否します。`--overwrite` はこのダウンローダーが作成した同じデータ構成だけを再取得します。
 
 Kaggleが認証を要求する環境では、ローカルで `KAGGLE_API_TOKEN`、または `KAGGLE_USERNAME` と `KAGGLE_KEY` を設定してください。認証情報はコード・Git・manifestへ保存しません。ブラウザで取得したZIPを使う場合は次のように指定します。
 
 ```bash
-uv run --no-sync mulg download --dataset mosi \
+uv run --no-sync mulg download --dataset mosi --source kaggle \
   --kaggle-archive /path/to/cmu-mosi.zip --output data/kaggle/mosi
 ```
 
 取得の疎通確認だけなら、全体を取得せずファイルを指定できます。これは完全な学習データではありません。
 
 ```bash
-uv run --no-sync mulg download --dataset mosi --output data/kaggle/check \
+uv run --no-sync mulg download --dataset mosi --source kaggle --output data/kaggle/check \
   --kaggle-file Raw/Transcript/Segmented/2iD-tVS8NPw.annotprocessed
 ```
 
@@ -118,7 +202,7 @@ uv run --no-sync mulg prepare-kaggle \
   --output data/mosi_kaggle.h5 --device auto
 ```
 
-`--extra raw` の依存関係が必要です。`bash setup.sh cpu` / `cu124` はこれらも導入します。
+`--extra raw` の依存関係が必要です。`bash setup.sh cpu raw` / `cu124 raw` はこれらも導入します。
 
 | 入力 | Kaggle経路の特徴量 |
 |---|---|
@@ -203,7 +287,7 @@ uv run --no-sync mulg prepare --dataset mosi \
 
 ## 全7構成を学習・評価（共通CLI）
 
-Kaggle経路は前述の `data/mosi_kaggle.h5` / `runs/mosi_kaggle` を指定します。以下は従来のSDK CSD経路の例です。
+Drive経路は前述の `data/mosi_drive_data.h5` / `runs/mosi_drive_data`、Kaggle経路は `data/mosi_kaggle.h5` / `runs/mosi_kaggle` を指定します。以下は従来のSDK CSD経路の例です。
 
 ```bash
 uv run --no-sync mulg run \
@@ -267,7 +351,7 @@ SDK経路を取得からまとめて実行する場合は `bash run_all.sh mosi 
 主な出力:
 
 ```text
-runs/mosi_kaggle/
+runs/mosi_drive_data/
   summary.csv                 # t/a/v/ta/tv/av/tavの7行、seed間のmeanと標本std
   results.json                # 各構成・seedの結果と件数
   tav/seed_13/
@@ -284,8 +368,8 @@ runs/mosi_kaggle/
 
 ```bash
 uv run --no-sync mulg evaluate \
-  --checkpoint runs/mosi_kaggle/tav/seed_13/best.pt \
-  --data data/mosi_kaggle.h5 --output runs/reevaluated_tav
+  --checkpoint runs/mosi_drive_data/tav/seed_13/best.pt \
+  --data data/mosi_drive_data.h5 --output runs/reevaluated_tav
 ```
 
 ## データなしで動作確認する
@@ -303,6 +387,7 @@ uv run --no-sync mulg run --data data/synthetic.h5 \
 ## 参照
 
 - 論文: https://doi.org/10.1038/s41598-025-93023-3
+- 指定Driveフォルダ: https://drive.google.com/drive/folders/1uEK737LXB9jAlf9kyqRs6B9N6cDncodq
 - Kaggle MOSI: https://www.kaggle.com/datasets/mathurinache/cmu-mosi
 - MMSAのラベル配布案内: https://github.com/thuiar/MMSA#2-datasets
 - Stanford GloVe: https://nlp.stanford.edu/projects/glove/

@@ -115,11 +115,15 @@ def test_rejects_path_escape_and_unrelated_destination(tmp_path):
     assert (unrelated / "keep.txt").read_text() == "keep"
 
 
-def test_cli_routes_mosi_to_kaggle_and_keeps_explicit_sdk(monkeypatch, tmp_path):
+def test_cli_routes_explicit_kaggle_and_sdk(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(cli, "download_kaggle", lambda *a: calls.append(("kaggle", a)))
     monkeypatch.setattr(cli, "download", lambda *a: calls.append(("sdk", a)))
-    monkeypatch.setattr(sys, "argv", ["mulg", "download", "--dataset", "mosi", "--output", str(tmp_path)])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mulg", "download", "--dataset", "mosi", "--source", "kaggle", "--output", str(tmp_path)],
+    )
     cli.main()
     assert calls[-1][0] == "kaggle"
     monkeypatch.setattr(

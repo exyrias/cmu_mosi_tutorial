@@ -13,6 +13,7 @@ dependencies = ["torch==2.6.0", "numpy>=1.26.4,<2", "h5py>=3.11,<4", "requests>=
 cpu = ["torch==2.6.0", "torchvision==0.21.0"]
 cu124 = ["torch==2.6.0", "torchvision==0.21.0"]
 raw = ["torchvision==0.21.0", "opensmile>=2.5,<3", "opencv-python-headless>=4.10,<5", "pyarrow>=14,<20", "pandas>=2.2,<3"]
+drive = ["gdown>=5.2,<6"]
 
 [dependency-groups]
 dev = ["pytest>=8.3,<9", "ruff>=0.9,<1"]
